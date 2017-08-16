@@ -3,6 +3,9 @@ module Bingo exposing (..)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick)
+import Http
+import Random
+import Json.Decode as Decode exposing (Decoder, field, succeed)
 
 
 -- MODEL
@@ -20,15 +23,8 @@ initialModel : Model
 initialModel =
     { name = "Jeff"
     , gameNumber = 1
-    , entries = initialEntries
+    , entries = []
     }
-
-
-initialEntries : List Entry
-initialEntries =
-    [ Entry 1 "Agile" 100 False
-    , Entry 2 "Other" 200 False
-    ]
 
 
 
@@ -38,16 +34,28 @@ initialEntries =
 type Msg
     = NewGame
     | Mark Int
+    | NewRandom Int
+    | NewEntries (Result Http.Error (List Entry))
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        NewRandom randomNumber ->
+            ( { model | gameNumber = randomNumber }, Cmd.none )
+
         NewGame ->
-            { model
-                | gameNumber = model.gameNumber + 1
-                , entries = initialEntries
-            }
+            ( { model | gameNumber = model.gameNumber + 1 }, getEntries )
+
+        NewEntries (Ok randomEntries) ->
+            ( {model | entries = randomEntries}, Cmd.none )
+
+        NewEntries (Err error) ->
+            let
+                _ =
+                    Debug.log "oops" error
+            in
+            ( model, Cmd.none )
 
         Mark id ->
             let
@@ -58,7 +66,37 @@ update msg model =
                     else
                         entry
             in
-            { model | entries = List.map markEntry model.entries }
+            ( { model | entries = List.map markEntry model.entries }, Cmd.none )
+
+
+--DECODERS
+
+entryDecoder : Decoder Entry
+entryDecoder =
+    Decode.map4 Entry
+        (field "id" Decode.int)
+        (field "phrase" Decode.string)
+        (field "points" Decode.int)
+        (succeed False)
+
+--COMMANDS
+
+
+generateRandomNumber : Cmd Msg
+generateRandomNumber =
+    Random.generate NewRandom (Random.int 1 100)
+
+
+entriesUrl : String
+entriesUrl =
+    "http://localhost:3000/random-entries"
+
+
+getEntries : Cmd Msg
+getEntries =
+    (Decode.list entryDecoder)
+        |> Http.get entriesUrl
+        |> Http.send NewEntries
 
 
 
@@ -113,6 +151,22 @@ viewEntryList entries =
     ul [] listOfEntries
 
 
+sumMarkedPoints : List Entry -> Int
+sumMarkedPoints entries =
+    List.filter .marked entries
+        |> List.map .points
+        |> List.sum
+
+
+viewScore : Int -> Html Msg
+viewScore sum =
+    div
+        [ class "score" ]
+        [ span [ class "label" ] [ text "Score" ]
+        , span [ class "value" ] [ text (toString sum) ]
+        ]
+
+
 view : Model -> Html Msg
 view model =
     div [ class "content" ]
@@ -121,15 +175,16 @@ view model =
         , viewEntryList model.entries
         , div [ class "button-group" ]
             [ button [ onClick NewGame ] [ text "New Game" ] ]
-        , div [ class "debug" ] [ text (toString model) ]
+        , viewScore (sumMarkedPoints model.entries)
         , viewFooter
         ]
 
 
 main : Program Never Model Msg
 main =
-    Html.beginnerProgram
-        { model = initialModel
+    Html.program
+        { init = ( initialModel, getEntries )
         , view = view
         , update = update
+        , subscriptions = \_ -> Sub.none
         }
